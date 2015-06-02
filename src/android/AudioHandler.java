@@ -24,6 +24,7 @@ import org.apache.cordova.CordovaResourceApi;
 
 import android.content.Context;
 import android.media.AudioManager;
+import android.media.MediaPlayer;
 import android.net.Uri;
 
 import java.util.ArrayList;
@@ -31,6 +32,8 @@ import java.util.ArrayList;
 import org.apache.cordova.PluginResult;
 import org.json.JSONArray;
 import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.util.HashMap;
 
 /**
@@ -49,7 +52,6 @@ public class AudioHandler extends CordovaPlugin {
     public static String TAG = "AudioHandler";
     HashMap<String, AudioPlayer> players;	// Audio player object
     ArrayList<AudioPlayer> pausedForPhone;     // Audio players that were paused when phone call came in
-    private int origVolumeStream = -1;
 
     /**
      * Constructor.
@@ -88,13 +90,22 @@ public class AudioHandler extends CordovaPlugin {
         else if (action.equals("startPlayingAudio")) {
             String target = args.getString(1);
             String fileUriStr;
+            int numberOfLoops = 1;
+            boolean playAudioWhenScreenIsLocked = true;
             try {
                 Uri targetUri = resourceApi.remapUri(Uri.parse(target));
                 fileUriStr = targetUri.toString();
             } catch (IllegalArgumentException e) {
                 fileUriStr = target;
             }
-            this.startPlayingAudio(args.getString(0), FileHelper.stripFileProtocol(fileUriStr));
+			if (args.length() > 1 && args.get(2) instanceof JSONObject) {
+				JSONObject playOptions = (JSONObject) args.get(2);
+				if (playOptions.has("numberOfLoops"))
+					numberOfLoops = playOptions.getInt("numberOfLoops");
+				if (playOptions.has("playAudioWhenScreenIsLocked"))
+					playAudioWhenScreenIsLocked = playOptions.getBoolean("playAudioWhenScreenIsLocked");
+			}
+            this.startPlayingAudio(args.getString(0), FileHelper.stripFileProtocol(fileUriStr),numberOfLoops, playAudioWhenScreenIsLocked);
         }
         else if (action.equals("seekToAudio")) {
             this.seekToAudio(args.getString(0), args.getInt(1));
@@ -123,7 +134,8 @@ public class AudioHandler extends CordovaPlugin {
         else if (action.equals("create")) {
             String id = args.getString(0);
             String src = FileHelper.stripFileProtocol(args.getString(1));
-            getOrCreatePlayer(id, src);
+            AudioPlayer audio = new AudioPlayer(this, id, src);
+            this.players.put(id, audio);
         }
         else if (action.equals("release")) {
             boolean b = this.release(args.getString(0));
@@ -143,9 +155,6 @@ public class AudioHandler extends CordovaPlugin {
      * Stop all audio players and recorders.
      */
     public void onDestroy() {
-        if (!players.isEmpty()) {
-            onLastPlayerReleased();
-        }
         for (AudioPlayer audio : this.players.values()) {
             audio.destroy();
         }
@@ -188,7 +197,7 @@ public class AudioHandler extends CordovaPlugin {
             // If phone idle, then resume playing those players we paused
             else if ("idle".equals(data)) {
                 for (AudioPlayer audio : this.pausedForPhone) {
-                    audio.startPlaying(null);
+                    audio.startPlaying(null,0);
                 }
                 this.pausedForPhone.clear();
             }
@@ -200,30 +209,16 @@ public class AudioHandler extends CordovaPlugin {
     // LOCAL METHODS
     //--------------------------------------------------------------------------
 
-    private AudioPlayer getOrCreatePlayer(String id, String file) {
-        AudioPlayer ret = players.get(id);
-        if (ret == null) {
-            if (players.isEmpty()) {
-                onFirstPlayerCreated();
-            }
-            ret = new AudioPlayer(this, id, file);
-            players.put(id, ret);
-        }
-        return ret;
-    }
-
     /**
      * Release the audio player instance to save memory.
      * @param id				The id of the audio player
      */
     private boolean release(String id) {
-        AudioPlayer audio = players.remove(id);
-        if (audio == null) {
+        if (!this.players.containsKey(id)) {
             return false;
         }
-        if (players.isEmpty()) {
-            onLastPlayerReleased();
-        }
+        AudioPlayer audio = this.players.get(id);
+        this.players.remove(id);
         audio.destroy();
         return true;
     }
@@ -234,8 +229,17 @@ public class AudioHandler extends CordovaPlugin {
      * @param file				The name of the file
      */
     public void startRecordingAudio(String id, String file) {
-        AudioPlayer audio = getOrCreatePlayer(id, file);
+        AudioPlayer audio = this.players.get(id);
+        if ( audio == null) {
+            audio = new AudioPlayer(this, id, file);
+            this.players.put(id, audio);
+            
+        }
+        
+        
         audio.startRecording(file);
+        
+        
     }
 
     /**
@@ -253,10 +257,16 @@ public class AudioHandler extends CordovaPlugin {
      * Start or resume playing audio file.
      * @param id				The id of the audio player
      * @param file				The name of the audio file.
+     * @param playAudioWhenScreenIsLocked 
+     * @param numberOfLoops 
      */
-    public void startPlayingAudio(String id, String file) {
-        AudioPlayer audio = getOrCreatePlayer(id, file);
-        audio.startPlaying(file);
+    public void startPlayingAudio(String id, String file, int numberOfLoops, boolean playAudioWhenScreenIsLocked) {
+        AudioPlayer audio = this.players.get(id);
+        if (audio == null) {
+            audio = new AudioPlayer(this, id, file);
+            this.players.put(id, audio);
+        }
+        audio.startPlaying(file,numberOfLoops);
     }
 
     /**
@@ -290,6 +300,8 @@ public class AudioHandler extends CordovaPlugin {
         AudioPlayer audio = this.players.get(id);
         if (audio != null) {
             audio.stopPlaying();
+            //audio.destroy();
+            //this.players.remove(id);
         }
     }
 
@@ -313,8 +325,19 @@ public class AudioHandler extends CordovaPlugin {
      * @return					The duration in msec.
      */
     public float getDurationAudio(String id, String file) {
-        AudioPlayer audio = getOrCreatePlayer(id, file);
-        return audio.getDuration(file);
+
+        // Get audio file
+        AudioPlayer audio = this.players.get(id);
+        if (audio != null) {
+            return (audio.getDuration(file));
+        }
+
+        // If not already open, then open the file
+        else {
+            audio = new AudioPlayer(this, id, file);
+            this.players.put(id, audio);
+            return (audio.getDuration(file));
+        }
     }
 
     /**
@@ -367,18 +390,6 @@ public class AudioHandler extends CordovaPlugin {
             audio.setVolume(volume);
         } else {
             System.out.println("AudioHandler.setVolume() Error: Unknown Audio Player " + id);
-        }
-    }
-
-    private void onFirstPlayerCreated() {
-        origVolumeStream = cordova.getActivity().getVolumeControlStream();
-        cordova.getActivity().setVolumeControlStream(AudioManager.STREAM_MUSIC);
-    }
-
-    private void onLastPlayerReleased() {
-        if (origVolumeStream != -1) {
-            cordova.getActivity().setVolumeControlStream(origVolumeStream);
-            origVolumeStream = -1;
         }
     }
 }

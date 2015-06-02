@@ -31,6 +31,8 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 
+
+
 /**
  * This class implements the audio playback and recording capabilities used by Cordova.
  * It is called by the AudioHandler Cordova class.
@@ -53,7 +55,8 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
                         MEDIA_STOPPED,
                         MEDIA_LOADING
                       };
-
+	                      
+	
     private static final String LOG_TAG = "AudioPlayer";
 
     // AudioPlayer message ids
@@ -83,6 +86,10 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
     private MediaPlayer player = null;      // Audio player object
     private boolean prepareOnly = true;     // playback after file prepare flag
     private int seekOnPrepared = 0;     // seek to this location once media is prepared
+
+	
+	private int currentPlayingLoop = 1;
+	private int numberOfLoops = 1;
 
     /**
      * Constructor.
@@ -209,8 +216,12 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
      * Start or resume playing audio file.
      *
      * @param file              The name of the audio file.
+     * @param numberOfLoops 
      */
-    public void startPlaying(String file) {
+    public void startPlaying(String file, final int numberOfLoops) {
+
+
+    	setNumberOfLoops(numberOfLoops);
         if (this.readyPlayer(file) && this.player != null) {
             this.player.start();
             this.setState(STATE.MEDIA_RUNNING);
@@ -254,7 +265,12 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
      * Stop playing the audio file.
      */
     public void stopPlaying() {
-        if ((this.state == STATE.MEDIA_RUNNING) || (this.state == STATE.MEDIA_PAUSED)) {
+        if ((this.state == STATE.MEDIA_STOPPED) || (this.state == STATE.MEDIA_NONE))
+        {
+            // do nothing
+            return;
+        }
+        else if ((this.state == STATE.MEDIA_RUNNING) || (this.state == STATE.MEDIA_PAUSED)) {
             this.player.pause();
             this.player.seekTo(0);
             Log.d(LOG_TAG, "stopPlaying is calling stopped");
@@ -271,10 +287,26 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
      *
      * @param player           The MediaPlayer that reached the end of the file
      */
-    public void onCompletion(MediaPlayer player) {
-        Log.d(LOG_TAG, "on completion is calling stopped");
-        this.setState(STATE.MEDIA_STOPPED);
-    }
+	public void onCompletion(MediaPlayer player) {
+
+		if (currentPlayingLoop < numberOfLoops) {
+			// play next loop
+			player.start();
+			this.currentPlayingLoop++;
+			Log.d(LOG_TAG, "on completion is calling. Number of loops "
+					+ numberOfLoops + " in loop " + currentPlayingLoop);
+		} else {
+
+			Log.d(LOG_TAG, "on completion is calling stopped");
+			this.setState(STATE.MEDIA_STOPPED);
+		}
+
+	}
+    
+    private void setNumberOfLoops(int numberOfLoops) {
+		this.currentPlayingLoop = 1;
+		this.numberOfLoops = numberOfLoops;
+	}
 
     /**
      * Get current position of playback.
@@ -331,7 +363,7 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
         // If no player yet, then create one
         else {
             this.prepareOnly = true;
-            this.startPlaying(file);
+            this.startPlaying(file,1);
 
             // This will only return value for local, since streaming
             // file hasn't been read yet.
@@ -468,6 +500,7 @@ public class AudioPlayer implements OnCompletionListener, OnPreparedListener, On
                 case MEDIA_NONE:
                     if (this.player == null) {
                         this.player = new MediaPlayer();
+                                                
                     }
                     try {
                         this.loadAudioFile(file);
